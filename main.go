@@ -13,7 +13,11 @@ func main() {
 	// Get a network listener on address "localhost:12345".
 	root := weaver.Init(context.Background())
 
-	// Get a client to the Reverser component.
+	greeter, err := weaver.Get[Greeter](root)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	reverser, err := weaver.Get[Reverser](root)
 	if err != nil {
 		log.Fatal(err)
@@ -28,11 +32,26 @@ func main() {
 
 	// Serve the /hello endpoint.
 	http.HandleFunc("/hello", func(w http.ResponseWriter, r *http.Request) {
-		reversed, err := reverser.Reverse(r.Context(), r.URL.Query().Get("name"))
+		ctx := r.Context()
+		name := r.URL.Query().Get("name")
+		reverse := r.URL.Query().Get("reverse")
+
+		if reverse == "true" {
+			var err error
+			name, err = reverser.Reverse(ctx, name)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+
+		greeting, err := greeter.Greet(ctx, name)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
-		fmt.Fprintf(w, "Hello, %s!\n", reversed)
+
+		fmt.Fprintf(w, greeting)
 	})
 	http.Serve(lis, nil)
 }

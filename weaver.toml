@@ -1,2 +1,5 @@
 [serviceweaver]
 binary = "./bin/server"
+
+["github.com/k-yomo/service-weaver-practice/Greeter"]
+Greeting = "Bonjour"

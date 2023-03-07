@@ -12,6 +12,21 @@ import (
 
 func init() {
 	codegen.Register(codegen.Registration{
+		Name:     "github.com/k-yomo/service-weaver-practice/Greeter",
+		Iface:    reflect.TypeOf((*Greeter)(nil)).Elem(),
+		New:      func() any { return &greeter{} },
+		ConfigFn: func(i any) any { return i.(*greeter).WithConfig.Config() },
+		LocalStubFn: func(impl any, tracer trace.Tracer) any {
+			return greeter_local_stub{impl: impl.(Greeter), tracer: tracer}
+		},
+		ClientStubFn: func(stub codegen.Stub, caller string) any {
+			return greeter_client_stub{stub: stub, greetMetrics: codegen.MethodMetricsFor(codegen.MethodLabels{Caller: caller, Component: "github.com/k-yomo/service-weaver-practice/Greeter", Method: "Greet"})}
+		},
+		ServerStubFn: func(impl any, addLoad func(uint64, float64)) codegen.Server {
+			return greeter_server_stub{impl: impl.(Greeter), addLoad: addLoad}
+		},
+	})
+	codegen.Register(codegen.Registration{
 		Name:  "github.com/k-yomo/service-weaver-practice/Reverser",
 		Iface: reflect.TypeOf((*Reverser)(nil)).Elem(),
 		New:   func() any { return &reverser{} },
@@ -28,6 +43,28 @@ func init() {
 }
 
 // Local stub implementations.
+
+type greeter_local_stub struct {
+	impl   Greeter
+	tracer trace.Tracer
+}
+
+func (s greeter_local_stub) Greet(ctx context.Context, a0 string) (r0 string, err error) {
+	span := trace.SpanFromContext(ctx)
+	if span.SpanContext().IsValid() {
+		// Create a child span for this method.
+		ctx, span = s.tracer.Start(ctx, "main.Greeter.Greet", trace.WithSpanKind(trace.SpanKindInternal))
+		defer func() {
+			if err != nil {
+				span.RecordError(err)
+				span.SetStatus(codes.Error, err.Error())
+			}
+			span.End()
+		}()
+	}
+
+	return s.impl.Greet(ctx, a0)
+}
 
 type reverser_local_stub struct {
 	impl   Reverser
@@ -52,6 +89,65 @@ func (s reverser_local_stub) Reverse(ctx context.Context, a0 string) (r0 string,
 }
 
 // Client stub implementations.
+
+type greeter_client_stub struct {
+	stub         codegen.Stub
+	greetMetrics *codegen.MethodMetrics
+}
+
+func (s greeter_client_stub) Greet(ctx context.Context, a0 string) (r0 string, err error) {
+	// Update metrics.
+	start := time.Now()
+	s.greetMetrics.Count.Add(1)
+
+	span := trace.SpanFromContext(ctx)
+	if span.SpanContext().IsValid() {
+		// Create a child span for this method.
+		ctx, span = s.stub.Tracer().Start(ctx, "main.Greeter.Greet", trace.WithSpanKind(trace.SpanKindClient))
+	}
+
+	defer func() {
+		// Catch and return any panics detected during encoding/decoding/rpc.
+		if err == nil {
+			err = codegen.CatchPanics(recover())
+		}
+		err = s.stub.WrapError(err)
+
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			s.greetMetrics.ErrorCount.Add(1)
+		}
+		span.End()
+
+		s.greetMetrics.Latency.Put(float64(time.Since(start).Microseconds()))
+	}()
+
+	// Preallocate a buffer of the right size.
+	size := 0
+	size += (4 + len(a0))
+	enc := codegen.NewEncoder()
+	enc.Reset(size)
+
+	// Encode arguments.
+	enc.String(a0)
+	var shardKey uint64
+
+	// Call the remote method.
+	s.greetMetrics.BytesRequest.Put(float64(len(enc.Data())))
+	var results []byte
+	results, err = s.stub.Run(ctx, 0, enc.Data(), shardKey)
+	if err != nil {
+		return
+	}
+	s.greetMetrics.BytesReply.Put(float64(len(results)))
+
+	// Decode the results.
+	dec := codegen.NewDecoder(results)
+	r0 = dec.String()
+	err = dec.Error()
+	return
+}
 
 type reverser_client_stub struct {
 	stub           codegen.Stub
@@ -113,6 +209,46 @@ func (s reverser_client_stub) Reverse(ctx context.Context, a0 string) (r0 string
 }
 
 // Server stub implementations.
+
+type greeter_server_stub struct {
+	impl    Greeter
+	addLoad func(key uint64, load float64)
+}
+
+// GetStubFn implements the stub.Server interface.
+func (s greeter_server_stub) GetStubFn(method string) func(ctx context.Context, args []byte) ([]byte, error) {
+	switch method {
+	case "Greet":
+		return s.greet
+	default:
+		return nil
+	}
+}
+
+func (s greeter_server_stub) greet(ctx context.Context, args []byte) (res []byte, err error) {
+	// Catch and return any panics detected during encoding/decoding/rpc.
+	defer func() {
+		if err == nil {
+			err = codegen.CatchPanics(recover())
+		}
+	}()
+
+	// Decode arguments.
+	dec := codegen.NewDecoder(args)
+	var a0 string
+	a0 = dec.String()
+
+	// TODO(rgrandl): The deferred function above will recover from panics in the
+	// user code: fix this.
+	// Call the local method.
+	r0, appErr := s.impl.Greet(ctx, a0)
+
+	// Encode the results.
+	enc := codegen.NewEncoder()
+	enc.String(r0)
+	enc.Error(appErr)
+	return enc.Data(), nil
+}
 
 type reverser_server_stub struct {
 	impl    Reverser
